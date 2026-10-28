@@ -3,114 +3,152 @@ package com.flightreservation.controller;
 import com.flightreservation.dto.BookingDraft;
 import com.flightreservation.dto.BookingForm;
 import com.flightreservation.dto.FlightDto;
+import com.flightreservation.dto.PassengerForm;
 import com.flightreservation.dto.SessionUser;
+import com.flightreservation.exception.ResourceNotFoundException;
+import com.flightreservation.exception.SeatsUnavailableException;
+import com.flightreservation.mapper.BookingMapper;
+import com.flightreservation.service.BookingService;
 import com.flightreservation.service.FlightService;
 import com.flightreservation.util.AppConstants;
-
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.validation.BindingResult;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.ModelAttribute;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.SessionAttribute;
+import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
-import javax.validation.Valid;
 import javax.servlet.http.HttpSession;
+import javax.validation.Valid;
+import java.time.LocalDate;
 
 @Controller
+@RequestMapping("/book")
 public class BookingController {
 
     private final FlightService flightService;
+    private final BookingService bookingService;
+    private final BookingMapper bookingMapper;
 
-    public BookingController(FlightService flightService) {
+    public BookingController(FlightService flightService, BookingService bookingService,
+                             BookingMapper bookingMapper) {
         this.flightService = flightService;
+        this.bookingService = bookingService;
+        this.bookingMapper = bookingMapper;
     }
 
-    /**
-     * Displays the booking form for the selected flight.
-     */
-    @GetMapping("/booking")
-    public String showBookingForm(
-            @RequestParam("flightId") Long flightId,
-            HttpSession session,
-            Model model,
-            RedirectAttributes redirectAttributes) {
+    // ---------- Step 1: Booking Form ----------
 
-        SessionUser user =
-                (SessionUser) session.getAttribute(AppConstants.SESSION_USER);
-
-        if (user == null) {
-            session.setAttribute(
-                    AppConstants.REDIRECT_AFTER_LOGIN,
-                    "/booking?flightId=" + flightId
-            );
-            return "redirect:/login";
-        }
-
-        FlightDto flight = flightService.getFlightById(flightId);
-
-        if (flight == null) {
-            redirectAttributes.addFlashAttribute(
-                    "errorMessage", "The selected flight could not be found.");
-            return "redirect:/";
-        }
-
-        model.addAttribute("flight", flight);
+    @GetMapping("/{flightNumber}")
+    public String showBookingForm(@PathVariable String flightNumber, Model model) {
+        model.addAttribute("flight", findFlight(flightNumber));
         model.addAttribute("bookingForm", new BookingForm());
-
-        return "booking";
+        model.addAttribute("today", LocalDate.now());
+        return "booking/booking-form";
     }
 
-    /**
-     * Validates the journey date and passenger count,
-     * then saves the booking draft in the session.
-     */
-    @PostMapping("/booking")
-    public String submitBookingForm(
-            @RequestParam("flightId") Long flightId,
-            @Valid @ModelAttribute("bookingForm") BookingForm bookingForm,
-            BindingResult bindingResult,
-            HttpSession session,
-            Model model,
-            RedirectAttributes redirectAttributes) {
+    @PostMapping("/{flightNumber}")
+    public String submitBookingForm(@PathVariable String flightNumber,
+                                    @Valid @ModelAttribute("bookingForm") BookingForm bookingForm,
+                                    BindingResult result, HttpSession session, Model model) {
+        FlightDto flight = findFlight(flightNumber);
+        model.addAttribute("flight", flight);
+        model.addAttribute("today", LocalDate.now());
 
-        SessionUser user =
-                (SessionUser) session.getAttribute(AppConstants.SESSION_USER);
-
-        if (user == null) {
-            session.setAttribute(
-                    AppConstants.REDIRECT_AFTER_LOGIN,
-                    "/booking?flightId=" + flightId
-            );
-            return "redirect:/login";
+        if (result.hasErrors()) {
+            return "booking/booking-form";
         }
 
-        FlightDto flight = flightService.getFlightById(flightId);
+        int available = bookingService.getAvailableSeats(
+                flight.getFlightId(), flight.getCapacity(), bookingForm.getJourneyDate());
+        if (available < bookingForm.getNumberOfPassengers()) {
+            model.addAttribute("seatError", "Booking not allowed: only " + available
+                    + " seat(s) available on " + bookingForm.getJourneyDate()
+                    + ", but you requested " + bookingForm.getNumberOfPassengers() + ".");
+            return "booking/booking-form";
+        }
 
-        if (flight == null) {
-            redirectAttributes.addFlashAttribute(
-                    "errorMessage", "The selected flight could not be found.");
+        session.setAttribute(AppConstants.BOOKING_DRAFT, bookingMapper.toDraft(flight, bookingForm));
+        return "redirect:/book/passenger";
+    }
+
+    // ---------- Step 2: Add Passenger (repeats once per passenger) ----------
+
+    @GetMapping("/passenger")
+    public String showPassengerForm(HttpSession session, Model model) {
+        BookingDraft draft = getDraft(session);
+        if (draft == null) {
             return "redirect:/";
         }
+        model.addAttribute("passengerForm", new PassengerForm());
+        addPassengerStepInfo(model, draft);
+        return "booking/add-passenger";
+    }
 
-        if (bindingResult.hasErrors()) {
-            model.addAttribute("flight", flight);
-            return "booking";
+    @PostMapping("/passenger")
+    public String addPassenger(@Valid @ModelAttribute("passengerForm") PassengerForm passengerForm,
+                               BindingResult result, HttpSession session, Model model,
+                               RedirectAttributes redirectAttrs) {
+        BookingDraft draft = getDraft(session);
+        if (draft == null) {
+            return "redirect:/";
+        }
+        if (result.hasErrors()) {
+            addPassengerStepInfo(model, draft);
+            return "booking/add-passenger";
         }
 
-        BookingDraft draft = new BookingDraft();
-        draft.setFlightId(flight.getFlightId());
-        draft.setFlightNumber(flight.getFlightNumber());
-        draft.setSource(flight.getSource());
-        draft.setDestination(flight.getDestination());
-        draft.setJourneyDate(bookingForm.getJourneyDate());
-        draft.setPassengerCount(bookingForm.getPassengerCount());
+        draft.getPassengers().add(passengerForm);
 
-        session.setAttribute("bookingDraft", draft);
+        if (draft.getPassengers().size() < draft.getNumberOfPassengers()) {
+            return "redirect:/book/passenger";            // next passenger
+        }
 
-        return "redirect:/booking/passengers";
+        // Last passenger: complete the booking
+        SessionUser user = (SessionUser) session.getAttribute(AppConstants.SESSION_USER);
+        try {
+            long bookingId = bookingService.createBooking(draft, user.getUserId());
+            session.removeAttribute(AppConstants.BOOKING_DRAFT);
+            return "redirect:/book/confirmation/" + bookingId;
+        } catch (SeatsUnavailableException e) {
+            // someone else booked the seats while this user was filling in passengers
+            session.removeAttribute(AppConstants.BOOKING_DRAFT);
+            redirectAttrs.addFlashAttribute("seatError", e.getMessage());
+            return "redirect:/book/" + draft.getFlightNumber();
+        }
+    }
+
+    // ---------- Step 3: Booking Confirmation ----------
+
+    @GetMapping("/confirmation/{bookingId}")
+    public String confirmation(@PathVariable long bookingId, HttpSession session, Model model) {
+        SessionUser user = (SessionUser) session.getAttribute(AppConstants.SESSION_USER);
+        model.addAttribute("booking", bookingService.getBooking(bookingId, user.getUserId()));
+        return "booking/booking-confirmation";
+    }
+
+    // ---------- helpers ----------
+
+    private FlightDto findFlight(String flightNumber) {
+        return flightService.findByFlightNumber(flightNumber)
+                .orElseThrow(() -> new ResourceNotFoundException("Flight " + flightNumber + " not found"));
+    }
+
+    private BookingDraft getDraft(HttpSession session) {
+        return (BookingDraft) session.getAttribute(AppConstants.BOOKING_DRAFT);
+    }
+
+    private void addPassengerStepInfo(Model model, BookingDraft draft) {
+        int total = draft.getNumberOfPassengers();
+        int added = draft.getPassengers().size();
+        int current = added + 1;
+        model.addAttribute("currentPassenger", current);
+        model.addAttribute("totalPassengers", total);
+        model.addAttribute("remaining", total - added);
+        model.addAttribute("progress", current * 100 / total);
+        model.addAttribute("lastPassenger", current == total);
     }
 }

@@ -22,6 +22,7 @@ public class FlightMapper {
         dto.setDepartureTime(flight.getDepartureTime());
         dto.setArrivalTime(flight.getArrivalTime());
         dto.setPricePerSeat(flight.getPricePerSeat());
+        dto.setCapacity(flight.getCapacity());
         return dto;
     }
 
