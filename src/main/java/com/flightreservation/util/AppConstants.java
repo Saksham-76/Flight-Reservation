@@ -8,4 +8,7 @@ public final class AppConstants {
 
     public static final String ROLE_USER = "User";
     public static final String ROLE_ADMIN = "Admin";
+    public static final String BOOKING_DRAFT = "bookingDraft";
+    public static final String STATUS_BOOKED = "BOOKED";
+    public static final String STATUS_CANCELLED = "CANCELLED";
 }

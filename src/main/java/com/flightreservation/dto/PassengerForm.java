@@ -4,43 +4,30 @@ import javax.validation.constraints.Max;
 import javax.validation.constraints.Min;
 import javax.validation.constraints.NotBlank;
 import javax.validation.constraints.NotNull;
+import javax.validation.constraints.Pattern;
 import javax.validation.constraints.Size;
+import java.io.Serializable;
 
-public class PassengerForm {
+public class PassengerForm implements Serializable {
+    private static final long serialVersionUID = 1L;
 
-    @NotBlank(message = "Passenger name is required.")
-    @Size(max = 100, message = "Passenger name cannot exceed 100 characters.")
+    @NotBlank(message = "Passenger name is required")
+    @Size(max = 50, message = "Name can be at most 50 characters")
     private String passengerName;
 
-    @NotBlank(message = "Please select the passenger's gender.")
-    private String gender;
-
-    @NotNull(message = "Passenger age is required.")
-    @Min(value = 1, message = "Passenger age must be at least 1.")
-    @Max(value = 120, message = "Passenger age cannot exceed 120.")
+    @NotNull(message = "Age is required")
+    @Min(value = 0, message = "Age must be between 0 and 120")
+    @Max(value = 120, message = "Age must be between 0 and 120")
     private Integer age;
 
-    public String getPassengerName() {
-        return passengerName;
-    }
+    @NotBlank(message = "Please select a gender")
+    @Pattern(regexp = "Male|Female|Other", message = "Please select a valid gender")
+    private String gender;
 
-    public void setPassengerName(String passengerName) {
-        this.passengerName = passengerName;
-    }
-
-    public String getGender() {
-        return gender;
-    }
-
-    public void setGender(String gender) {
-        this.gender = gender;
-    }
-
-    public Integer getAge() {
-        return age;
-    }
-
-    public void setAge(Integer age) {
-        this.age = age;
-    }
+    public String getPassengerName() { return passengerName; }
+    public void setPassengerName(String passengerName) { this.passengerName = passengerName; }
+    public Integer getAge() { return age; }
+    public void setAge(Integer age) { this.age = age; }
+    public String getGender() { return gender; }
+    public void setGender(String gender) { this.gender = gender; }
 }

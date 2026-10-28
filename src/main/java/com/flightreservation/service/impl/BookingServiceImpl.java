@@ -1,187 +1,142 @@
 package com.flightreservation.service.impl;
 
 import com.flightreservation.dto.BookingDraft;
-import com.flightreservation.dto.BookingSummary;
-import com.flightreservation.dto.PassengerForm;
+import com.flightreservation.dto.BookingDto;
+import com.flightreservation.exception.ResourceNotFoundException;
+import com.flightreservation.exception.SeatsUnavailableException;
+import com.flightreservation.mapper.BookingMapper;
+import com.flightreservation.model.Booking;
+import com.flightreservation.model.Flight;
+import com.flightreservation.model.Ticket;
 import com.flightreservation.service.BookingService;
-
-import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.BeanPropertyRowMapper;
+import org.springframework.jdbc.core.namedparam.BeanPropertySqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.jdbc.core.namedparam.SqlParameterSourceUtils;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.sql.Date;
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Service
 public class BookingServiceImpl implements BookingService {
 
-    private final NamedParameterJdbcTemplate jdbc;
+    private static final String FLIGHT_COLUMNS =
+            "SELECT flight_id, flight_number, source, destination, departure_time, "
+          + "arrival_time, capacity, price_per_seat FROM flight WHERE flight_id = :flightId";
 
-    public BookingServiceImpl(NamedParameterJdbcTemplate jdbc) {
+    private static final String FIND_FLIGHT = FLIGHT_COLUMNS;
+    private static final String LOCK_FLIGHT = FLIGHT_COLUMNS + " FOR UPDATE";
+
+    private static final String TAKEN_FILTER =
+            " FROM ticket t JOIN booking b ON t.booking_id = b.booking_id "
+          + "WHERE b.flight_id = :flightId AND b.journey_date = :journeyDate AND t.status = 'BOOKED'";
+    private static final String COUNT_TAKEN = "SELECT COUNT(*)" + TAKEN_FILTER;
+    private static final String TAKEN_SEATS = "SELECT t.seat_no" + TAKEN_FILTER;
+
+    private static final String INSERT_BOOKING =
+            "INSERT INTO booking (booking_date, journey_date, seats, total_price, status, flight_id, user_id) "
+          + "VALUES (:bookingDate, :journeyDate, :seats, :totalPrice, :status, :flightId, :userId)";
+    private static final String INSERT_TICKET =
+            "INSERT INTO ticket (passenger_name, gender, age, journey_date, seat_no, booking_id, status) "
+          + "VALUES (:passengerName, :gender, :age, :journeyDate, :seatNo, :bookingId, :status)";
+
+    private static final String FIND_BOOKING =
+            "SELECT booking_id, booking_date, journey_date, seats, total_price, status, flight_id, user_id "
+          + "FROM booking WHERE booking_id = :bookingId AND user_id = :userId";
+
+    private final NamedParameterJdbcTemplate jdbc;
+    private final BookingMapper bookingMapper;
+
+    public BookingServiceImpl(NamedParameterJdbcTemplate jdbc, BookingMapper bookingMapper) {
         this.jdbc = jdbc;
+        this.bookingMapper = bookingMapper;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public int getAvailableSeats(long flightId, int capacity, LocalDate journeyDate) {
+        Integer taken = jdbc.queryForObject(COUNT_TAKEN,
+                Map.of("flightId", flightId, "journeyDate", journeyDate), Integer.class);
+        return Math.max(capacity - (taken == null ? 0 : taken), 0);
     }
 
     @Override
     @Transactional
-    public BookingSummary confirmBooking(BookingDraft draft, Long userId) {
+    public long createBooking(BookingDraft draft, long userId) {
+        // 1. Lock the flight row. This MUST be the first statement of the transaction:
+        //    concurrent bookings of the same flight now wait here, and the plain SELECTs
+        //    below (which take their snapshot after the lock) see the previous booking.
+        Flight flight = jdbc.query(LOCK_FLIGHT, Map.of("flightId", draft.getFlightId()),
+                        new BeanPropertyRowMapper<>(Flight.class))
+                .stream().findFirst()
+                .orElseThrow(() -> new ResourceNotFoundException("Flight not found"));
 
-        // Validate basic booking information.
-        if (draft == null || userId == null || draft.getFlightId() == null) {
-            throw new IllegalArgumentException("Invalid booking details.");
+        // 2. Re-check availability inside the transaction
+        List<String> takenSeats = jdbc.queryForList(TAKEN_SEATS,
+                Map.of("flightId", flight.getFlightId(), "journeyDate", draft.getJourneyDate()),
+                String.class);
+        int available = flight.getCapacity() - takenSeats.size();
+        if (available < draft.getNumberOfPassengers()) {
+            throw new SeatsUnavailableException("Only " + Math.max(available, 0)
+                    + " seat(s) are left on this flight for the selected date.");
         }
 
-        LocalDate journeyDate = draft.getJourneyDate();
-        List<PassengerForm> passengers = draft.getPassengers();
-
-        if (journeyDate == null || journeyDate.isBefore(LocalDate.now())) {
-            throw new IllegalArgumentException(
-                    "Journey date must be today or a future date.");
-        }
-
-        if (passengers == null || passengers.isEmpty()
-                || passengers.size() > 10
-                || passengers.size() != draft.getPassengerCount()) {
-            throw new IllegalArgumentException(
-                    "Passenger count must be between 1 and 10.");
-        }
-
-        // Lock the flight row to serialize bookings for this flight.
-        List<Map<String, Object>> flights = jdbc.queryForList(
-                "SELECT flight_id, flight_number, source, destination, "
-                        + "capacity, price_per_seat "
-                        + "FROM flight WHERE flight_id = :flightId FOR UPDATE",
-                Map.of("flightId", draft.getFlightId())
-        );
-
-        if (flights.isEmpty()) {
-            throw new IllegalArgumentException("Selected flight does not exist.");
-        }
-
-        Map<String, Object> flight = flights.get(0);
-
-        String flightNumber = (String) flight.get("flight_number");
-        String source = (String) flight.get("source");
-        String destination = (String) flight.get("destination");
-        int capacity = ((Number) flight.get("capacity")).intValue();
-        double pricePerSeat =
-                ((Number) flight.get("price_per_seat")).doubleValue();
-
-        // Validate passenger details before inserting records.
-        for (PassengerForm passenger : passengers) {
-            if (passenger == null
-                    || passenger.getPassengerName() == null
-                    || passenger.getPassengerName().trim().isEmpty()
-                    || passenger.getGender() == null
-                    || passenger.getGender().trim().isEmpty()
-                    || passenger.getAge() == null
-                    || passenger.getAge() < 0
-                    || passenger.getAge() > 120) {
-
-                throw new IllegalArgumentException(
-                        "Please provide valid details for every passenger.");
-            }
-
-            if (passenger.getPassengerName().trim().length() > 50
-                    || passenger.getGender().trim().length() > 50) {
-                throw new IllegalArgumentException(
-                        "Passenger name or gender exceeds the allowed length.");
-            }
-        }
-
-        // Calculate seats already booked for this flight and date.
-        Integer bookedSeats = jdbc.queryForObject(
-                "SELECT COALESCE(SUM(seats), 0) "
-                        + "FROM booking "
-                        + "WHERE flight_id = :flightId "
-                        + "AND journey_date = :journeyDate "
-                        + "AND status = 'BOOKED'",
-                Map.of(
-                        "flightId", draft.getFlightId(),
-                        "journeyDate", Date.valueOf(journeyDate)
-                ),
-                Integer.class
-        );
-
-        int alreadyBooked = bookedSeats == null ? 0 : bookedSeats;
-        int requestedSeats = passengers.size();
-
-        if (requestedSeats > capacity - alreadyBooked) {
-            throw new IllegalArgumentException(
-                    "Not enough seats available for the selected journey date.");
-        }
-
-        double totalPrice = pricePerSeat * requestedSeats;
-
-        // Insert the booking and retrieve its generated ID.
-        String bookingSql =
-                "INSERT INTO booking "
-                        + "(booking_date, journey_date, seats, total_price, "
-                        + "status, flight_id, user_id) "
-                        + "VALUES (:bookingDate, :journeyDate, :seats, "
-                        + ":totalPrice, 'BOOKED', :flightId, :userId)";
-
-        MapSqlParameterSource bookingParams = new MapSqlParameterSource()
-                .addValue("bookingDate", Date.valueOf(LocalDate.now()))
-                .addValue("journeyDate", Date.valueOf(journeyDate))
-                .addValue("seats", requestedSeats)
-                .addValue("totalPrice", totalPrice)
-                .addValue("flightId", draft.getFlightId())
-                .addValue("userId", userId);
-
+        // 3. Insert the booking
+        Booking booking = bookingMapper.toEntity(draft, flight, userId);
         KeyHolder keyHolder = new GeneratedKeyHolder();
+        jdbc.update(INSERT_BOOKING, new BeanPropertySqlParameterSource(booking), keyHolder);
+        long bookingId = keyHolder.getKey().longValue();
 
-        jdbc.update(bookingSql, bookingParams, keyHolder, new String[]{"booking_id"});
+        // 4. Allocate seats and insert one ticket per passenger
+        List<String> seatNumbers = allocateSeats(flight.getCapacity(), takenSeats,
+                draft.getNumberOfPassengers());
+        List<Ticket> tickets = bookingMapper.toTicketEntities(draft, bookingId, seatNumbers);
+        jdbc.batchUpdate(INSERT_TICKET, SqlParameterSourceUtils.createBatch(tickets));
 
-        Number generatedId = keyHolder.getKey();
+        return bookingId;
+    }
 
-        if (generatedId == null) {
-            throw new IllegalStateException(
-                    "Unable to retrieve the booking ID.");
+    @Override
+    @Transactional(readOnly = true)
+    public BookingDto getBooking(long bookingId, long userId) {
+        Booking booking = jdbc.query(FIND_BOOKING, Map.of("bookingId", bookingId, "userId", userId),
+                        new BeanPropertyRowMapper<>(Booking.class))
+                .stream().findFirst()
+                .orElseThrow(() -> new ResourceNotFoundException("Booking not found"));
+
+        Flight flight = jdbc.query(FIND_FLIGHT, Map.of("flightId", booking.getFlightId()),
+                        new BeanPropertyRowMapper<>(Flight.class))
+                .stream().findFirst()
+                .orElseThrow(() -> new ResourceNotFoundException("Flight not found"));
+
+        return bookingMapper.toDto(booking, flight);
+    }
+
+    /** Picks the first free seats. Seats freed by cancellations are reused. */
+    private List<String> allocateSeats(int capacity, List<String> takenSeats, int needed) {
+        Set<String> taken = new HashSet<>(takenSeats);
+        List<String> seats = new ArrayList<>();
+        for (int i = 1; i <= capacity && seats.size() < needed; i++) {
+            String label = seatLabel(i);
+            if (!taken.contains(label)) {
+                seats.add(label);
+            }
         }
+        return seats;
+    }
 
-        long bookingId = generatedId.longValue();
-
-        // Insert one ticket for each passenger.
-        String ticketSql =
-                "INSERT INTO ticket "
-                        + "(passenger_name, gender, age, journey_date, "
-                        + "seat_no, booking_id, status) "
-                        + "VALUES (:name, :gender, :age, :journeyDate, "
-                        + ":seatNo, :bookingId, 'BOOKED')";
-
-        for (int i = 0; i < passengers.size(); i++) {
-            PassengerForm passenger = passengers.get(i);
-
-            MapSqlParameterSource ticketParams =
-                    new MapSqlParameterSource()
-                            .addValue("name",
-                                    passenger.getPassengerName().trim())
-                            .addValue("gender",
-                                    passenger.getGender().trim())
-                            .addValue("age", passenger.getAge())
-                            .addValue("journeyDate", Date.valueOf(journeyDate))
-                            .addValue("seatNo", "S" + (i + 1))
-                            .addValue("bookingId", bookingId);
-
-            jdbc.update(ticketSql, ticketParams);
-        }
-
-        // Prepare the confirmation summary.
-        BookingSummary summary = new BookingSummary();
-        summary.setBookingId(bookingId);
-        summary.setFlightNumber(flightNumber);
-        summary.setSource(source);
-        summary.setDestination(destination);
-        summary.setJourneyDate(journeyDate);
-        summary.setPassengerCount(requestedSeats);
-        summary.setTotalPrice(totalPrice);
-        summary.setPassengers(passengers);
-
-        return summary;
+    /** 1 -> A1 ... 6 -> A6, 7 -> B1 ... (six seats per row). */
+    private String seatLabel(int index) {
+        char row = (char) ('A' + (index - 1) / 6);
+        int col = (index - 1) % 6 + 1;
+        return row + String.valueOf(col);
     }
 }
