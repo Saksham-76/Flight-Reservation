@@ -21,6 +21,7 @@
         <c:when test="${loggedUser.role == 'Admin'}">
           <li class="nav-item"><a class="nav-link" href="${ctx}/admin/dashboard"><i class="bi bi-speedometer2"></i> Dashboard</a></li>
           <li class="nav-item"><a class="nav-link" href="${ctx}/admin/flights/add"><i class="bi bi-plus-circle"></i> Add Flight</a></li>
+          <li class="nav-item"><a class="nav-link" href="${ctx}/admin/flights/all"><i class="bi bi-list-ul"></i> All Flights</a></li>
         </c:when>
         <c:otherwise>
           <li class="nav-item"><a class="nav-link" href="${ctx}/user/dashboard"><i class="bi bi-speedometer2"></i> Dashboard</a></li>

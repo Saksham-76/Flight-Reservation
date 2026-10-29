@@ -8,6 +8,7 @@ public class FlightDto {
     private String departureTime;
     private String arrivalTime;
     private double pricePerSeat;
+    private int capacity;
 
     public Long getFlightId() { return flightId; }
     public void setFlightId(Long flightId) { this.flightId = flightId; }
@@ -23,7 +24,6 @@ public class FlightDto {
     public void setArrivalTime(String arrivalTime) { this.arrivalTime = arrivalTime; }
     public double getPricePerSeat() { return pricePerSeat; }
     public void setPricePerSeat(double pricePerSeat) { this.pricePerSeat = pricePerSeat; }
-    private int capacity;
     public int getCapacity() { return capacity; }
     public void setCapacity(int capacity) { this.capacity = capacity; }
 }

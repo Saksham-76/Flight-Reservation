@@ -1,6 +1,7 @@
 package com.flightreservation.interceptor;
 
 import com.flightreservation.dto.SessionUser;
+import com.flightreservation.exception.ForbiddenException;
 import com.flightreservation.util.AppConstants;
 import org.springframework.web.servlet.HandlerInterceptor;
 
@@ -18,7 +19,6 @@ public class AdminInterceptor implements HandlerInterceptor {
         if (user != null && AppConstants.ROLE_ADMIN.equals(user.getRole())) {
             return true;
         }
-        response.sendError(HttpServletResponse.SC_FORBIDDEN, "Admin access only");
-        return false;
+        throw new ForbiddenException("This page is only available to administrators.");
     }
 }

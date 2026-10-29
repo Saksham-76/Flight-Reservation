@@ -11,6 +11,9 @@ import com.flightreservation.model.Ticket;
 import com.flightreservation.util.AppConstants;
 import org.springframework.stereotype.Component;
 
+import com.flightreservation.dto.BookingSummaryDto;
+import com.flightreservation.model.BookingSummary;
+
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
@@ -71,5 +74,21 @@ public class BookingMapper {
         dto.setTotalPrice(booking.getTotalPrice());
         dto.setStatus(booking.getStatus());
         return dto;
+    }
+    
+    /** Booking list row -> BookingSummaryDto, deciding whether the Cancel button is active. */
+    public BookingSummaryDto toSummaryDto(BookingSummary row, LocalDate today) {
+        BookingSummaryDto dto = new BookingSummaryDto();
+        dto.setBookingId(row.getBookingId());
+        dto.setFlightNumber(row.getFlightNumber());
+        dto.setJourneyDate(row.getJourneyDate());
+        dto.setStatus(row.getStatus());
+        dto.setCancellable(AppConstants.STATUS_BOOKED.equals(row.getStatus())
+                && !row.getJourneyDate().isBefore(today));
+        return dto;
+    }
+
+    public List<BookingSummaryDto> toSummaryDtoList(List<BookingSummary> rows, LocalDate today) {
+        return rows.stream().map(r -> toSummaryDto(r, today)).toList();
     }
 }
