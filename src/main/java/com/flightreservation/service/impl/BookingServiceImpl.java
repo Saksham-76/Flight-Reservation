@@ -18,6 +18,17 @@ import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.flightreservation.dto.BookingSummaryDto;
+import com.flightreservation.dto.TicketDto;
+import com.flightreservation.exception.BookingNotCancellableException;
+import com.flightreservation.mapper.TicketMapper;
+import com.flightreservation.model.BookingSummary;
+import com.flightreservation.util.AppConstants;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -52,13 +63,42 @@ public class BookingServiceImpl implements BookingService {
             "SELECT booking_id, booking_date, journey_date, seats, total_price, status, flight_id, user_id "
           + "FROM booking WHERE booking_id = :bookingId AND user_id = :userId";
 
+    private static final String LIST_BOOKINGS =
+            "SELECT b.booking_id, f.flight_number, b.journey_date, b.status "
+          + "FROM booking b JOIN flight f ON f.flight_id = b.flight_id "
+          + "WHERE b.user_id = :userId ORDER BY b.booking_id DESC";
+
+    private static final String FIND_TICKETS =
+            "SELECT t.pnr_no, t.passenger_name, t.gender, t.age, t.journey_date, t.seat_no, "
+          + "t.booking_id, t.status FROM ticket t JOIN booking b ON b.booking_id = t.booking_id "
+          + "WHERE t.booking_id = :bookingId AND b.user_id = :userId ORDER BY t.pnr_no";
+
+    private static final String LOCK_BOOKING = FIND_BOOKING + " FOR UPDATE";
+
+    private static final String CANCEL_ALL_TICKETS =
+            "UPDATE ticket SET status = 'CANCELLED' WHERE booking_id = :bookingId AND status = 'BOOKED'";
+    private static final String CANCEL_TICKET =
+            "UPDATE ticket SET status = 'CANCELLED' "
+          + "WHERE pnr_no = :pnrNo AND booking_id = :bookingId AND status = 'BOOKED'";
+    private static final String COUNT_ACTIVE_TICKETS =
+            "SELECT COUNT(*) FROM ticket WHERE booking_id = :bookingId AND status = 'BOOKED'";
+    private static final String CANCEL_BOOKING =
+            "UPDATE booking SET status = 'CANCELLED' WHERE booking_id = :bookingId";
+    
+    
     private final NamedParameterJdbcTemplate jdbc;
     private final BookingMapper bookingMapper;
+    private final TicketMapper ticketMapper;
 
-    public BookingServiceImpl(NamedParameterJdbcTemplate jdbc, BookingMapper bookingMapper) {
+    private static final Logger log = LoggerFactory.getLogger(BookingServiceImpl.class);
+    
+    public BookingServiceImpl(NamedParameterJdbcTemplate jdbc, BookingMapper bookingMapper,
+                              TicketMapper ticketMapper) {
         this.jdbc = jdbc;
         this.bookingMapper = bookingMapper;
+        this.ticketMapper = ticketMapper;
     }
+    
 
     @Override
     @Transactional(readOnly = true)
@@ -100,7 +140,11 @@ public class BookingServiceImpl implements BookingService {
                 draft.getNumberOfPassengers());
         List<Ticket> tickets = bookingMapper.toTicketEntities(draft, bookingId, seatNumbers);
         jdbc.batchUpdate(INSERT_TICKET, SqlParameterSourceUtils.createBatch(tickets));
-
+        
+        log.info("Booking {} created: flight {} on {}, {} passenger(s), user {}",
+                bookingId, flight.getFlightNumber(), draft.getJourneyDate(),
+                draft.getNumberOfPassengers(), userId);
+        
         return bookingId;
     }
 
@@ -138,5 +182,71 @@ public class BookingServiceImpl implements BookingService {
         char row = (char) ('A' + (index - 1) / 6);
         int col = (index - 1) % 6 + 1;
         return row + String.valueOf(col);
+    }
+    
+    @Override
+    @Transactional(readOnly = true)
+    public List<BookingSummaryDto> getBookingsForUser(long userId) {
+        List<BookingSummary> rows = jdbc.query(LIST_BOOKINGS, Map.of("userId", userId),
+                new BeanPropertyRowMapper<>(BookingSummary.class));
+        return bookingMapper.toSummaryDtoList(rows, LocalDate.now());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<TicketDto> getTickets(long bookingId, long userId) {
+        List<Ticket> tickets = jdbc.query(FIND_TICKETS,
+                Map.of("bookingId", bookingId, "userId", userId),
+                new BeanPropertyRowMapper<>(Ticket.class));
+        if (tickets.isEmpty()) {
+            throw new ResourceNotFoundException("Booking not found");
+        }
+        return ticketMapper.toDtoList(tickets, LocalDate.now());
+    }
+
+    @Override
+    @Transactional
+    public void cancelBooking(long bookingId, long userId) {
+        lockCancellableBooking(bookingId, userId);
+        jdbc.update(CANCEL_ALL_TICKETS, Map.of("bookingId", bookingId));
+        jdbc.update(CANCEL_BOOKING, Map.of("bookingId", bookingId));
+        log.info("Booking {} cancelled by user {}", bookingId, userId);
+    }
+
+    @Override
+    @Transactional
+    public void cancelTicket(long bookingId, long pnrNo, long userId) {
+        lockCancellableBooking(bookingId, userId);
+
+        int updated = jdbc.update(CANCEL_TICKET, Map.of("pnrNo", pnrNo, "bookingId", bookingId));
+        if (updated == 0) {
+        	log.info("Ticket {} of booking {} cancelled by user {}", pnrNo, bookingId, userId);
+            throw new BookingNotCancellableException("This ticket is already cancelled or does not exist.");
+        }
+
+        Integer active = jdbc.queryForObject(COUNT_ACTIVE_TICKETS,
+                Map.of("bookingId", bookingId), Integer.class);
+        if (active != null && active == 0) {
+            jdbc.update(CANCEL_BOOKING, Map.of("bookingId", bookingId));
+        }
+    }
+
+    /**
+     * Loads the booking with a row lock (so two cancellations cannot interleave) and checks
+     * that it belongs to the user, is still BOOKED and the journey is not in the past.
+     */
+    private Booking lockCancellableBooking(long bookingId, long userId) {
+        Booking booking = jdbc.query(LOCK_BOOKING, Map.of("bookingId", bookingId, "userId", userId),
+                        new BeanPropertyRowMapper<>(Booking.class))
+                .stream().findFirst()
+                .orElseThrow(() -> new ResourceNotFoundException("Booking not found"));
+
+        if (!AppConstants.STATUS_BOOKED.equals(booking.getStatus())) {
+            throw new BookingNotCancellableException("This booking is already cancelled.");
+        }
+        if (booking.getJourneyDate().isBefore(LocalDate.now())) {
+            throw new BookingNotCancellableException("A journey that has already taken place cannot be cancelled.");
+        }
+        return booking;
     }
 }

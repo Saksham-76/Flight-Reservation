@@ -16,7 +16,7 @@ import com.flightreservation.interceptor.AuthInterceptor;
 
 @Configuration
 @EnableWebMvc
-@ComponentScan(basePackages = "com.flightreservation.controller")
+@ComponentScan(basePackages = {"com.flightreservation.controller", "com.flightreservation.exception"})
 public class WebConfig implements WebMvcConfigurer {
 
     @Bean

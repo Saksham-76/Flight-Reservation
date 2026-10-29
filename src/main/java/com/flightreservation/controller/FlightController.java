@@ -41,46 +41,6 @@ public class FlightController {
         return null;
     }
 
-    @GetMapping("/admin/flights/add")
-    public String showAddFlightForm(HttpSession session, Model model) {
 
-        String redirect = checkAdminAccess(session);
-
-        if (redirect != null) {
-            return redirect;
-        }
-
-        model.addAttribute("flight", new FlightDto());
-
-        return "add-flight";
-    }
-
-    @PostMapping("/admin/flights/add")
-    public String addFlight(
-            @ModelAttribute("flight") FlightDto flightDetails,
-            HttpSession session,
-            Model model,
-            RedirectAttributes redirectAttributes) {
-
-        String redirect = checkAdminAccess(session);
-
-        if (redirect != null) {
-            return redirect;
-        }
-
-        try {
-            flightService.addFlight(flightDetails);
-
-            redirectAttributes.addFlashAttribute(
-                    "successMessage", "Flight added successfully!");
-
-            return "redirect:/admin/flights/add";
-
-        } catch (IllegalArgumentException ex) {
-
-            model.addAttribute("errorMessage", ex.getMessage());
-
-            return "add-flight";
-        }
-    }
+    
 }

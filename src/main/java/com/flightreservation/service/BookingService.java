@@ -2,8 +2,11 @@ package com.flightreservation.service;
 
 import com.flightreservation.dto.BookingDraft;
 import com.flightreservation.dto.BookingDto;
+import com.flightreservation.dto.BookingSummaryDto;
+import com.flightreservation.dto.TicketDto;
 
 import java.time.LocalDate;
+import java.util.List;
 
 public interface BookingService {
 
@@ -20,4 +23,20 @@ public interface BookingService {
 
     /** Returns a booking, only if it belongs to the given user. */
     BookingDto getBooking(long bookingId, long userId);
+    
+    /** All bookings of this user only, newest first. */
+    List<BookingSummaryDto> getBookingsForUser(long userId);
+
+    /** Tickets of one booking, only if the booking belongs to the user. */
+    List<TicketDto> getTickets(long bookingId, long userId);
+
+    /**
+     * Cancels the whole booking and all its tickets (their seats become available again).
+     *
+     * @throws com.flightreservation.exception.BookingNotCancellableException if already cancelled or in the past
+     */
+    void cancelBooking(long bookingId, long userId);
+
+    /** Cancels one ticket; if it was the last active ticket, the booking becomes CANCELLED too. */
+    void cancelTicket(long bookingId, long pnrNo, long userId);
 }
