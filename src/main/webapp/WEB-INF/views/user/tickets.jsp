@@ -19,7 +19,7 @@
 <div class="row g-4">
   <c:forEach var="t" items="${tickets}">
     <div class="col-md-6">
-      <div class="card shadow-sm h-100 ${t.status == 'CANCELLED' ? 'border-danger' : ''}">
+      <div class="card hover-card hc-orange h-100 ${t.status == 'CANCELLED' ? 'opacity-75' : ''}">
         <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
           <span><i class="bi bi-airplane"></i> Flight Ticket</span>
           <span class="badge bg-light text-dark">PNR: <c:out value="${t.pnrNo}"/></span>
@@ -48,7 +48,7 @@
           </div>
         </div>
         <c:if test="${t.cancellable}">
-          <div class="card-footer bg-white text-end">
+          <div class="card-footer bg-transparent text-end">
             <form action="${ctx}/user/bookings/${t.bookingId}/tickets/${t.pnrNo}/cancel" method="post"
                   onsubmit="return confirm('Cancel ticket PNR ${t.pnrNo}? The seat will be released.');">
               <button type="submit" class="btn btn-outline-danger btn-sm"><i class="bi bi-x-circle"></i> Cancel Ticket</button>

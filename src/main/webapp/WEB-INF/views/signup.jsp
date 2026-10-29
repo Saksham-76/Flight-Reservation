@@ -6,7 +6,11 @@
 
 <div class="row justify-content-center">
   <div class="col-md-6 col-lg-5">
-    <h4><i class="bi bi-person-plus"></i> Sign Up</h4>
+    <div class="text-center mb-3">
+  <div class="auth-icon"><i class="bi bi-person-plus-fill"></i></div>
+  <h4 class="mb-1">Create your account</h4>
+  <p class="text-muted">Join in a minute and start booking flights.</p>
+</div>
 
     <c:if test="${not empty successMessage}">
       <div class="alert alert-success"><c:out value="${successMessage}"/></div>
