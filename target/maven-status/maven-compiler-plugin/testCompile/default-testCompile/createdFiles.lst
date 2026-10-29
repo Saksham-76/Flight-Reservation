@@ -1,0 +1,6 @@
+com\flightreservation\dto\LoginFormValidationTest.class
+com\flightreservation\service\impl\UserServiceImplTest.class
+com\flightreservation\mapper\UserMapperTest.class
+com\flightreservation\controller\AuthControllerTest.class
+com\flightreservation\dto\SignupFormValidationTest.class
+com\flightreservation\interceptor\AuthInterceptorTest.class
