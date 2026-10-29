@@ -109,6 +109,12 @@
             <version>5.20.0</version>
             <scope>test</scope>
         </dependency>
+        <dependency>
+    		<groupId>org.glassfish</groupId>
+    		<artifactId>jakarta.el</artifactId>
+    		<version>3.0.4</version>
+    		<scope>test</scope>
+		</dependency>
 
     </dependencies>
 
@@ -139,6 +145,9 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.5.2</version>
+                <configuration>
+        			<argLine>-XX:+EnableDynamicAgentLoading</argLine>
+    			</configuration>
             </plugin>
 
         </plugins>
